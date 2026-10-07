@@ -2,6 +2,7 @@ import os
 import asyncio
 import tempfile
 import urllib.request
+import base64
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -23,6 +24,7 @@ client = RunwayML(api_key=RUNWAY_API_SECRET)
 
 user_data = {}
 
+
 STYLES = {
     "realistic": "maximum photorealistic cinematic live-action realism",
     "pixar": "high-quality polished 3D animated movie style",
@@ -42,6 +44,7 @@ def main_menu():
         ],
         [InlineKeyboardButton("⏱ 10 секунд", callback_data="duration")],
     ]
+
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -54,6 +57,7 @@ def style_menu():
         [InlineKeyboardButton("😂 Вирусный юмор", callback_data="style_funny")],
         [InlineKeyboardButton("⬅️ Назад", callback_data="back")],
     ]
+
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -64,11 +68,12 @@ def get_user(user_id):
             "photo": None,
             "waiting_prompt": False,
         }
+
     return user_data[user_id]
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = get_user(update.effective_user.id)
+    get_user(update.effective_user.id)
 
     await update.message.reply_text(
         "🎬 Добро пожаловать в AI Video Bot!\n\n"
@@ -196,11 +201,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             photo=photo,
         )
 
-        video_file = await download_video(video_url)
-
         await status_message.edit_text(
-            "✅ Видео готово! Загружаю..."
+            "⬇️ Видео готово! Загружаю..."
         )
+
+        video_file = await download_video(video_url)
 
         with open(video_file, "rb") as video:
             await update.message.reply_video(
@@ -230,20 +235,38 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def generate_video(prompt, photo=None):
-    if photo:
+
+    # ==========================================
+    # РЕЖИМ 1 — ТЕКСТ → ВИДЕО
+    # ==========================================
+
+    if photo is None:
+
         task = await asyncio.to_thread(
-            lambda: client.image_to_video.create(
+            lambda: client.text_to_video.create(
                 model="gen4.5",
-                prompt_image=photo,
                 prompt_text=prompt,
                 ratio="720:1280",
                 duration=10,
             ).wait_for_task_output()
         )
+
+    # ==========================================
+    # РЕЖИМ 2 — ФОТО → ВИДЕО
+    # ==========================================
+
     else:
+
+        image_base64 = base64.b64encode(photo).decode("utf-8")
+
+        prompt_image = (
+            f"data:image/jpeg;base64,{image_base64}"
+        )
+
         task = await asyncio.to_thread(
             lambda: client.image_to_video.create(
                 model="gen4.5",
+                prompt_image=prompt_image,
                 prompt_text=prompt,
                 ratio="720:1280",
                 duration=10,
@@ -254,6 +277,7 @@ async def generate_video(prompt, photo=None):
 
 
 async def download_video(url):
+
     temporary_file = tempfile.NamedTemporaryFile(
         delete=False,
         suffix=".mp4",
@@ -271,6 +295,7 @@ async def download_video(url):
 
 
 def main():
+
     application = (
         Application.builder()
         .token(TELEGRAM_BOT_TOKEN)
@@ -286,7 +311,10 @@ def main():
     )
 
     application.add_handler(
-        MessageHandler(filters.PHOTO, photo_handler)
+        MessageHandler(
+            filters.PHOTO,
+            photo_handler
+        )
     )
 
     application.add_handler(
