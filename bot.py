@@ -1,84 +1,49 @@
 import os
-import asyncio
 import tempfile
-import urllib.request
-import base64
+import asyncio
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
-    MessageHandler,
     CallbackQueryHandler,
+    MessageHandler,
     ContextTypes,
     filters,
 )
 
-from runwayml import RunwayML, TaskFailedError
+from magic_hour import AsyncClient
 
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-RUNWAY_API_SECRET = os.environ["RUNWAY_API_SECRET"]
+MAGIC_HOUR_API_KEY = os.environ["MAGIC_HOUR_API_KEY"]
 
-client = RunwayML(api_key=RUNWAY_API_SECRET)
+client = AsyncClient(token=MAGIC_HOUR_API_KEY)
 
-user_data = {}
+
+user_settings = {}
 
 
 STYLES = {
-    "realistic": "maximum photorealistic cinematic live-action realism",
-    "pixar": "high-quality polished 3D animated movie style",
-    "barbie": "luxury Barbie-inspired pastel pink glamorous aesthetic",
-    "cinematic": "cinematic movie look, dramatic lighting, realistic camera movement",
-    "funny": "funny viral social media video, expressive reactions, comedic timing",
+    "realistic": "maximum photorealistic live-action cinematic realism, real human actors",
+    "pixar": "high-quality stylized 3D animated movie look, expressive characters, cinematic lighting",
+    "barbie": "luxury Barbie-inspired world, glossy pastel pink aesthetic, glamorous cinematic lighting",
+    "cinematic": "cinematic film look, dramatic lighting, realistic camera movement, premium production quality",
+    "funny": "funny cinematic visual style, expressive reactions, comedic timing",
 }
 
 
-def main_menu():
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("🎬 Создать видео", callback_data="create")],
-        [InlineKeyboardButton("📷 Видео из фото", callback_data="photo")],
-        [
-            InlineKeyboardButton("🎨 Стиль", callback_data="style"),
-            InlineKeyboardButton("📐 9:16", callback_data="ratio"),
-        ],
-        [InlineKeyboardButton("⏱ 10 секунд", callback_data="duration")],
+        [InlineKeyboardButton("🖼 Видео из фото", callback_data="image")],
     ]
-
-    return InlineKeyboardMarkup(keyboard)
-
-
-def style_menu():
-    keyboard = [
-        [InlineKeyboardButton("🎥 Реализм", callback_data="style_realistic")],
-        [InlineKeyboardButton("✨ Pixar 3D", callback_data="style_pixar")],
-        [InlineKeyboardButton("💗 Barbie", callback_data="style_barbie")],
-        [InlineKeyboardButton("🎬 Кино", callback_data="style_cinematic")],
-        [InlineKeyboardButton("😂 Вирусный юмор", callback_data="style_funny")],
-        [InlineKeyboardButton("⬅️ Назад", callback_data="back")],
-    ]
-
-    return InlineKeyboardMarkup(keyboard)
-
-
-def get_user(user_id):
-    if user_id not in user_data:
-        user_data[user_id] = {
-            "style": "realistic",
-            "photo": None,
-            "waiting_prompt": False,
-        }
-
-    return user_data[user_id]
-
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    get_user(update.effective_user.id)
 
     await update.message.reply_text(
-        "🎬 Добро пожаловать в AI Video Bot!\n\n"
-        "Выбери действие:",
-        reply_markup=main_menu(),
+        "🎥 Добро пожаловать в AI Video Studio!\n\n"
+        "Я помогу создать короткое AI-видео.\n\n"
+        "Выбери способ создания:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
 
@@ -86,247 +51,240 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    user = get_user(query.from_user.id)
+    user_id = query.from_user.id
 
     if query.data == "create":
-        user["photo"] = None
-        user["waiting_prompt"] = True
+        user_settings[user_id] = {
+            "mode": "text",
+            "style": "realistic",
+            "ratio": "9:16",
+            "duration": 5,
+        }
 
-        await query.message.reply_text(
-            "🎬 Напиши описание видео.\n\n"
-            "Например: девушка идёт по улице, начинается дождь, "
-            "она удивлённо смотрит на небо."
+        keyboard = [
+            [
+                InlineKeyboardButton("🎬 Realistic", callback_data="style_realistic"),
+                InlineKeyboardButton("🧸 Pixar 3D", callback_data="style_pixar"),
+            ],
+            [
+                InlineKeyboardButton("💗 Barbie", callback_data="style_barbie"),
+                InlineKeyboardButton("🎞 Cinematic", callback_data="style_cinematic"),
+            ],
+            [
+                InlineKeyboardButton("😂 Funny", callback_data="style_funny"),
+            ],
+        ]
+
+        await query.edit_message_text(
+            "Выбери стиль видео:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
-    elif query.data == "photo":
-        user["waiting_prompt"] = False
+    elif query.data == "image":
+        user_settings[user_id] = {
+            "mode": "image",
+            "style": "realistic",
+            "ratio": "9:16",
+            "duration": 5,
+        }
 
-        await query.message.reply_text(
-            "📷 Пришли фотографию.\n\n"
-            "После неё я попрошу описание движения."
-        )
-
-    elif query.data == "style":
-        await query.message.reply_text(
-            "🎨 Выбери стиль:",
-            reply_markup=style_menu(),
+        await query.edit_message_text(
+            "🖼 Отправь мне фотографию.\n\n"
+            "После этого я попрошу описание движения для видео."
         )
 
     elif query.data.startswith("style_"):
         style = query.data.replace("style_", "")
 
-        if style in STYLES:
-            user["style"] = style
+        user_settings[user_id]["style"] = style
 
-        await query.message.reply_text(
-            "✅ Стиль выбран.",
-            reply_markup=main_menu(),
+        keyboard = [
+            [InlineKeyboardButton("9:16", callback_data="ratio_9:16")],
+        ]
+
+        await query.edit_message_text(
+            f"Стиль выбран: {style}\n\n"
+            "Теперь выбери формат:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
-    elif query.data == "ratio":
-        await query.message.reply_text(
-            "📐 Формат: 9:16"
+    elif query.data.startswith("ratio_"):
+        ratio = query.data.replace("ratio_", "")
+
+        user_settings[user_id]["ratio"] = ratio
+
+        keyboard = [
+            [
+                InlineKeyboardButton("5 секунд", callback_data="duration_5"),
+                InlineKeyboardButton("10 секунд", callback_data="duration_10"),
+            ]
+        ]
+
+        await query.edit_message_text(
+            "Выбери длительность:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
         )
 
-    elif query.data == "duration":
-        await query.message.reply_text(
-            "⏱ Длительность: 10 секунд."
+    elif query.data.startswith("duration_"):
+        duration = int(query.data.replace("duration_", ""))
+
+        user_settings[user_id]["duration"] = duration
+
+        await query.edit_message_text(
+            "✍️ Теперь отправь описание видео.\n\n"
+            "Например:\n"
+            "«Девушка идёт по улице под дождём, "
+            "ветер развевает волосы, камера плавно приближается»"
         )
 
-    elif query.data == "back":
-        await query.message.reply_text(
-            "Главное меню:",
-            reply_markup=main_menu(),
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+
+    if user_id not in user_settings:
+        await update.message.reply_text(
+            "Сначала нажми /start и выбери «Видео из фото»."
         )
+        return
 
-
-async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = get_user(update.effective_user.id)
+    if user_settings[user_id].get("mode") != "image":
+        return
 
     photo = update.message.photo[-1]
 
-    telegram_file = await context.bot.get_file(photo.file_id)
+    file = await context.bot.get_file(photo.file_id)
 
-    file_bytes = await telegram_file.download_as_bytearray()
+    temp_dir = tempfile.mkdtemp()
+    image_path = os.path.join(temp_dir, "input.jpg")
 
-    user["photo"] = bytes(file_bytes)
-    user["waiting_prompt"] = True
+    await file.download_to_drive(image_path)
+
+    user_settings[user_id]["image_path"] = image_path
 
     await update.message.reply_text(
-        "📷 Фото получено!\n\n"
+        "Фото получено ✅\n\n"
         "Теперь напиши, что должно происходить в видео."
     )
 
 
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = get_user(update.effective_user.id)
+async def generate_video(prompt, settings):
+    temp_dir = tempfile.mkdtemp()
 
-    if not user["waiting_prompt"]:
-        await update.message.reply_text(
-            "Выбери действие в меню 👇",
-            reply_markup=main_menu(),
+    style = STYLES.get(settings["style"], STYLES["realistic"])
+
+    full_prompt = f"""
+{style}.
+
+{prompt}
+
+Vertical {settings["ratio"]}.
+Smooth natural motion.
+Clear visible action.
+Strong visual composition.
+No subtitles.
+No text on screen.
+No watermark.
+"""
+
+    if settings["mode"] == "text":
+
+        response = await client.v1.text_to_video.generate(
+            prompt=full_prompt,
+            aspect_ratio=settings["ratio"],
+            duration_seconds=settings["duration"],
+            name="Telegram AI Video",
+            wait_for_completion=True,
+            download_outputs=True,
+            download_directory=temp_dir,
         )
-        return
-
-    prompt = update.message.text.strip()
-
-    if not prompt:
-        return
-
-    style = STYLES.get(
-        user["style"],
-        STYLES["realistic"]
-    )
-
-    final_prompt = (
-        f"{style}. "
-        f"{prompt}. "
-        "Vertical social media video, 9:16 composition, "
-        "clear subject, natural movement, cinematic camera motion, "
-        "high visual quality."
-    )
-
-    photo = user["photo"]
-
-    user["waiting_prompt"] = False
-
-    status_message = await update.message.reply_text(
-        "🎬 Генерирую видео...\n\n"
-        "Это может занять несколько минут ⏳"
-    )
-
-    try:
-        video_url = await generate_video(
-            prompt=final_prompt,
-            photo=photo,
-        )
-
-        await status_message.edit_text(
-            "⬇️ Видео готово! Загружаю..."
-        )
-
-        video_file = await download_video(video_url)
-
-        with open(video_file, "rb") as video:
-            await update.message.reply_video(
-                video=video,
-                caption="🎬 Готово!",
-            )
-
-        os.remove(video_file)
-
-        await update.message.reply_text(
-            "Что сделаем дальше?",
-            reply_markup=main_menu(),
-        )
-
-    except TaskFailedError:
-        await status_message.edit_text(
-            "❌ Runway не смог создать видео.\n\n"
-            "Попробуй другое описание."
-        )
-
-    except Exception as e:
-        await status_message.edit_text(
-            "❌ Ошибка при создании видео."
-        )
-
-        print("ERROR:", repr(e))
-
-
-async def generate_video(prompt, photo=None):
-
-    # ==========================================
-    # РЕЖИМ 1 — ТЕКСТ → ВИДЕО
-    # ==========================================
-
-    if photo is None:
-
-        task = await asyncio.to_thread(
-            lambda: client.text_to_video.create(
-                model="gen4.5",
-                prompt_text=prompt,
-                ratio="720:1280",
-                duration=10,
-            ).wait_for_task_output()
-        )
-
-    # ==========================================
-    # РЕЖИМ 2 — ФОТО → ВИДЕО
-    # ==========================================
 
     else:
 
-        image_base64 = base64.b64encode(photo).decode("utf-8")
-
-        prompt_image = (
-            f"data:image/jpeg;base64,{image_base64}"
+        response = await client.v1.image_to_video.generate(
+            prompt=full_prompt,
+            assets={
+                "image_file_path": settings["image_path"]
+            },
+            aspect_ratio=settings["ratio"],
+            duration_seconds=settings["duration"],
+            name="Telegram Image To Video",
+            wait_for_completion=True,
+            download_outputs=True,
+            download_directory=temp_dir,
         )
 
-        task = await asyncio.to_thread(
-            lambda: client.image_to_video.create(
-                model="gen4.5",
-                prompt_image=prompt_image,
-                prompt_text=prompt,
-                ratio="720:1280",
-                duration=10,
-            ).wait_for_task_output()
+    paths = getattr(response, "downloaded_paths", None)
+
+    if not paths:
+        raise RuntimeError(
+            f"Видео не было скачано. Ответ Magic Hour: {response}"
         )
 
-    return task.output[0]
+    return paths[0]
 
 
-async def download_video(url):
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
 
-    temporary_file = tempfile.NamedTemporaryFile(
-        delete=False,
-        suffix=".mp4",
+    if user_id not in user_settings:
+        await update.message.reply_text(
+            "Нажми /start, чтобы начать."
+        )
+        return
+
+    settings = user_settings[user_id]
+
+    if settings.get("mode") == "image" and "image_path" not in settings:
+        await update.message.reply_text(
+            "Сначала отправь фотографию 🖼"
+        )
+        return
+
+    prompt = update.message.text
+
+    await update.message.reply_text(
+        "🎬 Генерирую видео...\n\n"
+        "Это может занять некоторое время."
     )
 
-    temporary_file.close()
+    try:
+        video_path = await generate_video(prompt, settings)
 
-    await asyncio.to_thread(
-        urllib.request.urlretrieve,
-        url,
-        temporary_file.name,
-    )
+        with open(video_path, "rb") as video:
+            await update.message.reply_video(
+                video=video,
+                caption="✨ Готово!"
+            )
 
-    return temporary_file.name
+    except Exception as e:
+        print("MAGIC HOUR ERROR:", repr(e))
+
+        await update.message.reply_text(
+            "❌ Не удалось создать видео.\n\n"
+            "Я уже записал ошибку в Railway Logs."
+        )
 
 
 def main():
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-    application = (
-        Application.builder()
-        .token(TELEGRAM_BOT_TOKEN)
-        .build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button_handler))
+
+    app.add_handler(
+        MessageHandler(filters.PHOTO, handle_photo)
     )
 
-    application.add_handler(
-        CommandHandler("start", start)
-    )
-
-    application.add_handler(
-        CallbackQueryHandler(button_handler)
-    )
-
-    application.add_handler(
-        MessageHandler(
-            filters.PHOTO,
-            photo_handler
-        )
-    )
-
-    application.add_handler(
+    app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
-            text_handler,
+            handle_text
         )
     )
 
-    print("AI Video Bot started!")
+    print("Bot started")
 
-    application.run_polling()
+    app.run_polling()
 
 
 if __name__ == "__main__":
