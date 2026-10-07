@@ -1,8 +1,7 @@
 import os
-import base64
 import asyncio
 import tempfile
-import requests
+import urllib.request
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -24,7 +23,6 @@ client = RunwayML(api_key=RUNWAY_API_SECRET)
 
 user_data = {}
 
-
 STYLES = {
     "realistic": "maximum photorealistic cinematic live-action realism",
     "pixar": "high-quality polished 3D animated movie style",
@@ -36,21 +34,14 @@ STYLES = {
 
 def main_menu():
     keyboard = [
-        [
-            InlineKeyboardButton("🎬 Создать видео", callback_data="create"),
-        ],
-        [
-            InlineKeyboardButton("📷 Видео из фото", callback_data="photo"),
-        ],
+        [InlineKeyboardButton("🎬 Создать видео", callback_data="create")],
+        [InlineKeyboardButton("📷 Видео из фото", callback_data="photo")],
         [
             InlineKeyboardButton("🎨 Стиль", callback_data="style"),
             InlineKeyboardButton("📐 9:16", callback_data="ratio"),
         ],
-        [
-            InlineKeyboardButton("⏱ 10 секунд", callback_data="duration"),
-        ],
+        [InlineKeyboardButton("⏱ 10 секунд", callback_data="duration")],
     ]
-
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -63,28 +54,24 @@ def style_menu():
         [InlineKeyboardButton("😂 Вирусный юмор", callback_data="style_funny")],
         [InlineKeyboardButton("⬅️ Назад", callback_data="back")],
     ]
-
     return InlineKeyboardMarkup(keyboard)
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+def get_user(user_id):
+    if user_id not in user_data:
+        user_data[user_id] = {
+            "style": "realistic",
+            "photo": None,
+            "waiting_prompt": False,
+        }
+    return user_data[user_id]
 
-    user_data[user_id] = {
-        "style": "realistic",
-        "photo": None,
-        "waiting_prompt": False,
-    }
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = get_user(update.effective_user.id)
 
     await update.message.reply_text(
         "🎬 Добро пожаловать в AI Video Bot!\n\n"
-        "Здесь ты сможешь создавать короткие AI-видео.\n\n"
-        "Сейчас доступны:\n"
-        "🎬 Видео по описанию\n"
-        "📷 Видео из фотографии\n"
-        "🎨 Несколько стилей\n"
-        "📐 Формат 9:16\n"
-        "⏱ Длительность 10 секунд\n\n"
         "Выбери действие:",
         reply_markup=main_menu(),
     )
@@ -94,34 +81,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    user_id = query.from_user.id
-
-    if user_id not in user_data:
-        user_data[user_id] = {
-            "style": "realistic",
-            "photo": None,
-            "waiting_prompt": False,
-        }
+    user = get_user(query.from_user.id)
 
     if query.data == "create":
-        user_data[user_id]["photo"] = None
-        user_data[user_id]["waiting_prompt"] = True
+        user["photo"] = None
+        user["waiting_prompt"] = True
 
         await query.message.reply_text(
-            "🎬 Отлично!\n\n"
-            "Напиши, какое видео хочешь создать.\n\n"
-            "Например:\n"
-            "«Девушка идёт по улице, начинается сильный дождь, "
-            "она удивлённо смотрит на небо. Кинематографичная съёмка.»\n\n"
-            "После сообщения я запущу генерацию."
+            "🎬 Напиши описание видео.\n\n"
+            "Например: девушка идёт по улице, начинается дождь, "
+            "она удивлённо смотрит на небо."
         )
 
     elif query.data == "photo":
-        user_data[user_id]["waiting_prompt"] = False
+        user["waiting_prompt"] = False
 
         await query.message.reply_text(
-            "📷 Пришли мне фотографию, из которой нужно сделать видео.\n\n"
-            "После фотографии я попрошу описание движения."
+            "📷 Пришли фотографию.\n\n"
+            "После неё я попрошу описание движения."
         )
 
     elif query.data == "style":
@@ -134,23 +111,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         style = query.data.replace("style_", "")
 
         if style in STYLES:
-            user_data[user_id]["style"] = style
+            user["style"] = style
 
         await query.message.reply_text(
-            f"✅ Стиль выбран: {style}\n\n"
-            "Теперь можно создавать видео.",
+            "✅ Стиль выбран.",
             reply_markup=main_menu(),
         )
 
     elif query.data == "ratio":
         await query.message.reply_text(
-            "📐 Формат установлен: 9:16\n"
-            "Итоговый формат: 720 × 1280"
+            "📐 Формат: 9:16"
         )
 
     elif query.data == "duration":
         await query.message.reply_text(
-            "⏱ Длительность установлена: 10 секунд."
+            "⏱ Длительность: 10 секунд."
         )
 
     elif query.data == "back":
@@ -161,14 +136,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-
-    if user_id not in user_data:
-        user_data[user_id] = {
-            "style": "realistic",
-            "photo": None,
-            "waiting_prompt": False,
-        }
+    user = get_user(update.effective_user.id)
 
     photo = update.message.photo[-1]
 
@@ -176,31 +144,19 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     file_bytes = await telegram_file.download_as_bytearray()
 
-    encoded = base64.b64encode(file_bytes).decode("utf-8")
-
-    user_data[user_id]["photo"] = f"data:image/jpeg;base64,{encoded}"
-    user_data[user_id]["waiting_prompt"] = True
+    user["photo"] = bytes(file_bytes)
+    user["waiting_prompt"] = True
 
     await update.message.reply_text(
         "📷 Фото получено!\n\n"
-        "Теперь напиши, что должно происходить в видео.\n\n"
-        "Например:\n"
-        "«Девушка улыбается, ветер красиво развевает волосы, "
-        "она поворачивается к камере.»"
+        "Теперь напиши, что должно происходить в видео."
     )
 
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+    user = get_user(update.effective_user.id)
 
-    if user_id not in user_data:
-        user_data[user_id] = {
-            "style": "realistic",
-            "photo": None,
-            "waiting_prompt": False,
-        }
-
-    if not user_data[user_id].get("waiting_prompt"):
+    if not user["waiting_prompt"]:
         await update.message.reply_text(
             "Выбери действие в меню 👇",
             reply_markup=main_menu(),
@@ -212,8 +168,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not prompt:
         return
 
-    style_key = user_data[user_id].get("style", "realistic")
-    style = STYLES.get(style_key, STYLES["realistic"])
+    style = STYLES.get(
+        user["style"],
+        STYLES["realistic"]
+    )
 
     final_prompt = (
         f"{style}. "
@@ -223,9 +181,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "high visual quality."
     )
 
-    photo = user_data[user_id].get("photo")
+    photo = user["photo"]
 
-    user_data[user_id]["waiting_prompt"] = False
+    user["waiting_prompt"] = False
 
     status_message = await update.message.reply_text(
         "🎬 Генерирую видео...\n\n"
@@ -241,40 +199,34 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         video_file = await download_video(video_url)
 
         await status_message.edit_text(
-            "✅ Видео готово! Загружаю его сюда..."
+            "✅ Видео готово! Загружаю..."
         )
 
         with open(video_file, "rb") as video:
             await update.message.reply_video(
                 video=video,
-                caption="🎬 Готово!\n\nСоздано через AI Video Bot.",
+                caption="🎬 Готово!",
             )
 
-        try:
-            os.remove(video_file)
-        except Exception:
-            pass
+        os.remove(video_file)
 
         await update.message.reply_text(
             "Что сделаем дальше?",
             reply_markup=main_menu(),
         )
 
-    except TaskFailedError as e:
+    except TaskFailedError:
         await status_message.edit_text(
             "❌ Runway не смог создать видео.\n\n"
-            "Попробуй изменить описание и повторить."
+            "Попробуй другое описание."
         )
-
-        print("RUNWAY ERROR:", e)
 
     except Exception as e:
         await status_message.edit_text(
-            "❌ Произошла ошибка при создании видео.\n\n"
-            "Проверь настройки API и попробуй ещё раз."
+            "❌ Ошибка при создании видео."
         )
 
-        print("ERROR:", e)
+        print("ERROR:", repr(e))
 
 
 async def generate_video(prompt, photo=None):
@@ -302,19 +254,18 @@ async def generate_video(prompt, photo=None):
 
 
 async def download_video(url):
-    response = await asyncio.to_thread(
-        lambda: requests.get(url, timeout=180)
-    )
-
-    response.raise_for_status()
-
     temporary_file = tempfile.NamedTemporaryFile(
         delete=False,
         suffix=".mp4",
     )
 
-    temporary_file.write(response.content)
     temporary_file.close()
+
+    await asyncio.to_thread(
+        urllib.request.urlretrieve,
+        url,
+        temporary_file.name,
+    )
 
     return temporary_file.name
 
@@ -335,16 +286,13 @@ def main():
     )
 
     application.add_handler(
-        MessageHandler(
-            filters.PHOTO,
-            photo_handler
-        )
+        MessageHandler(filters.PHOTO, photo_handler)
     )
 
     application.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
-            text_handler
+            text_handler,
         )
     )
 
@@ -355,4 +303,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # Railway deployment update
